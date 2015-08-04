@@ -21,14 +21,20 @@ func (s Solution) String() string {
 
 // Population is a collection of solutions.
 type Population struct {
-	Size, Length int
-	Solutions    []Solution
+	Solutions []Solution
+}
+
+func (pop *Population) Size() int {
+	return len(pop.Solutions)
+}
+
+func (pop *Population) Length() int {
+	return pop.Solutions[0].Bits.Len()
 }
 
 // NewPopulation returns an unevaluated population.
 func NewPopulation(size, length int) *Population {
 	pop := new(Population)
-	pop.Size, pop.Length = size, length
 	pop.Solutions = make([]Solution, size)
 	for i := 0; i < size; i++ {
 		pop.Solutions[i] = randomSolution(length)
@@ -101,7 +107,7 @@ func frequency(pop *Population, indices []int) []int {
 	numPerms := 1 << uint(len(indices))
 	perms := make([]int, numPerms)
 
-	for i := 0; i < pop.Size; i++ {
+	for i := 0; i < pop.Size(); i++ {
 		index := 0
 
 		for j := len(indices) - 1; j >= 0; j-- {
@@ -128,11 +134,11 @@ func entropy(freqs []int, size int) float64 {
 }
 
 func Frequencies(pop *Population) [][][]int {
-	freqs := make([][][]int, pop.Length)
+	freqs := make([][][]int, pop.Length())
 
 	indices1 := make([]int, 1)
 	indices2 := make([]int, 2)
-	for i := 0; i < pop.Length; i++ {
+	for i := 0; i < pop.Length(); i++ {
 		freqs[i] = make([][]int, i+1)
 		for j := 0; j < i; j++ {
 			indices2[0], indices2[1] = i, j
@@ -150,17 +156,17 @@ func Frequencies(pop *Population) [][][]int {
 // pair of problem variables. The frequencies of bits in the population
 // are used for the probabilites.
 func distanceMatrix(pop *Population, frequencies [][][]int) *matrix {
-	distances := newMatrix(pop.Length)
+	distances := newMatrix(pop.Length())
 
-	for i := 0; i < pop.Length; i++ {
+	for i := 0; i < pop.Length(); i++ {
 		for j := 0; j < i; j++ {
-			distances.set(i, j, entropy(frequencies[i][j], pop.Size))
+			distances.set(i, j, entropy(frequencies[i][j], pop.Size()))
 		}
 
-		distances.set(i, i, entropy(frequencies[i][i], pop.Size))
+		distances.set(i, i, entropy(frequencies[i][i], pop.Size()))
 	}
 
-	for i := 0; i < pop.Length; i++ {
+	for i := 0; i < pop.Length(); i++ {
 		for j := 0; j < i; j++ {
 			distances.set(i, j, distances.get(i, i)+distances.get(j, j)-distances.get(i, j))
 		}
@@ -187,12 +193,29 @@ func neighbour(index int, sm *matrix, mpm [][]int) int {
 
 func LinkageTree(pop *Population, frequencies [][][]int) [][]int {
 
+	// Validate Input
+
+	switch pop.Length() {
+	case 0:
+		return nil
+	case 1:
+		return [][]int{[]int{0}}
+	case 2:
+		return [][]int{[]int{0}, []int{1}, []int{0, 1}}
+	}
+	if pop.Length() == 0 {
+		return nil
+	}
+
+	if pop.Length() == 1 {
+	}
+
 	distances := distanceMatrix(pop, frequencies)
 
 	// Array mpm will store all unmerged subsets, starting from the
 	// singleton subsets and ending with the set of all problem variables.
-	mpm := make([][]int, pop.Length)
-	order := rand.Perm(pop.Length)
+	mpm := make([][]int, pop.Length())
+	order := rand.Perm(pop.Length())
 	for i := 0; i < len(mpm); i++ {
 		mpm[i] = make([]int, 1)
 		mpm[i][0] = order[i]
@@ -200,14 +223,14 @@ func LinkageTree(pop *Population, frequencies [][][]int) [][]int {
 
 	// Array fos will store all singleton subsets and every subset created
 	// by merging subsets during the algorithm.
-	fos := make([][]int, pop.Length, pop.Length+pop.Length-1)
+	fos := make([][]int, pop.Length(), pop.Length()+pop.Length()-1)
 	for i := 0; i < len(mpm); i++ {
 		fos[i] = mpm[i]
 	}
 
 	// Similarites contains the similarity measures between the subsets
 	// stored in the mpm array.
-	sm := newMatrix(pop.Length)
+	sm := newMatrix(pop.Length())
 	for i := 0; i < len(mpm); i++ {
 		for j := 0; j < len(mpm); j++ {
 			sm.set(i, j, distances.get(mpm[i][0], mpm[j][0]))
@@ -215,7 +238,7 @@ func LinkageTree(pop *Population, frequencies [][][]int) [][]int {
 		sm.set(i, i, 0.0)
 	}
 
-	chain := make([]int, pop.Length+2)
+	chain := make([]int, pop.Length()+2)
 	end := 0
 	done := false
 
@@ -242,7 +265,7 @@ func LinkageTree(pop *Population, frequencies [][][]int) [][]int {
 				chain[end] = chain[end-2]
 			}
 			end++
-			if end > pop.Length {
+			if end > pop.Length() {
 				break
 			}
 		}
