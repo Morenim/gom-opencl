@@ -114,6 +114,84 @@ func findDevice(platforms []cl.CL_platform_id, deviceType cl.CL_device_type) (pl
 	return
 }
 
+func printPlatforms(platforms []cl.CL_platform_id) {
+
+	log.Printf("Debug: found %d platforms:", len(platforms))
+
+	getParam := func(id cl.CL_platform_id, name cl.CL_platform_info) interface{} {
+		var numChars cl.CL_size_t
+		var info interface{}
+
+		status := cl.CLGetPlatformInfo(id, name, 0, nil, &numChars)
+		status = cl.CLGetPlatformInfo(id, name, numChars, &info, nil)
+
+		if status != cl.CL_SUCCESS {
+			log.Fatalf("Fatal error: could not retrieve OpenCL platform info for id %d", id)
+		}
+
+		return info.(string)
+	}
+
+	for _, id := range platforms {
+		log.Printf("%s %d", "PlatformID", id)
+		log.Printf("\t%-11s: %s", "Name", getParam(id, cl.CL_PLATFORM_NAME))
+		log.Printf("\t%-11s: %s", "Vendor", getParam(id, cl.CL_PLATFORM_VENDOR))
+		log.Printf("\t%-11s: %s", "Version", getParam(id, cl.CL_PLATFORM_VERSION))
+		log.Printf("\t%-11s: %s", "Profile", getParam(id, cl.CL_PLATFORM_PROFILE))
+		log.Printf("\t%-11s: %s", "Extensions", getParam(id, cl.CL_PLATFORM_EXTENSIONS))
+	}
+}
+
+func printGeneration(numGenerations int, pop *Population) {
+	fmt.Printf("Generation %d\n", numGenerations)
+	fmt.Println("===============")
+	for i, solution := range pop.Solutions {
+		solution.Fitness = Evaluate(4, solution.Bits)
+		fmt.Printf("x_%-2d: %v", i, solution)
+	}
+	fmt.Println("===============")
+	fmt.Println()
+}
+
+func flattenIntoSlice(src [][]int, dest []cl.CL_uint) {
+	i := 0
+	for _, node := range src {
+		dest[i] = cl.CL_uint(len(node))
+		for _, index := range node {
+			dest[i] = cl.CL_uint(index)
+			i++
+		}
+	}
+	dest[i] = 0
+}
+
+func populationToSlice(pop *Population, dest []cl.CL_uint) {
+
+	for i, solution := range pop.Solutions {
+		var raw uint32
+		raw = 0
+
+		var j uint32
+		for j = 0; j < 32; j++ {
+			if solution.Bits.Has(int(j)) {
+				raw |= (1 << j)
+			}
+		}
+
+		dest[i] = cl.CL_uint(raw)
+	}
+}
+
+func setKernelArg(kernel cl.CL_kernel, pos int, data *cl.CL_mem) {
+	status := cl.CLSetKernelArg(
+		kernel, cl.CL_uint(pos), cl.CL_size_t(unsafe.Sizeof(data)),
+		unsafe.Pointer(data))
+
+	if status != cl.CL_SUCCESS {
+		log.Fatal("Fatal error: could not set arg %d for OpenCL kernel.", pos)
+	}
+}
+
 func parseCommandLine() {
 
 	flag.BoolVar(&useCPU, "cpu", false, "Whether to use the CPU over the GPU.")
@@ -143,32 +221,7 @@ func runOpenCL() {
 		log.Fatalf("Fatal error: could not retrieve OpenCL platform IDs.")
 	}
 
-	// Print debug info for the platforms.
-
-	log.Printf("Debug: found %d platforms:", numPlatforms)
-
-	getParam := func(id cl.CL_platform_id, name cl.CL_platform_info) interface{} {
-		var numChars cl.CL_size_t
-		var info interface{}
-
-		status := cl.CLGetPlatformInfo(id, name, 0, nil, &numChars)
-		status = cl.CLGetPlatformInfo(id, name, numChars, &info, nil)
-
-		if status != cl.CL_SUCCESS {
-			log.Fatalf("Fatal error: could not retrieve OpenCL platform info for id %d", id)
-		}
-
-		return info.(string)
-	}
-
-	for _, id := range platforms {
-		log.Printf("%s %d", "PlatformID", id)
-		log.Printf("\t%-11s: %s", "Name", getParam(id, cl.CL_PLATFORM_NAME))
-		log.Printf("\t%-11s: %s", "Vendor", getParam(id, cl.CL_PLATFORM_VENDOR))
-		log.Printf("\t%-11s: %s", "Version", getParam(id, cl.CL_PLATFORM_VERSION))
-		log.Printf("\t%-11s: %s", "Profile", getParam(id, cl.CL_PLATFORM_PROFILE))
-		log.Printf("\t%-11s: %s", "Extensions", getParam(id, cl.CL_PLATFORM_EXTENSIONS))
-	}
+	printPlatforms(platforms)
 
 	//---------------------------------------------------
 	// Step 2: Discover and retrieve OpenCL devices.
@@ -277,9 +330,9 @@ func runOpenCL() {
 
 	dataSize := cl.CL_size_t(unsafe.Sizeof(size)) * popSize
 
-	populationData := make([]cl.CL_uint, populationSize)
+	populationData := make([]cl.CL_uint, pop.Size())
 
-	offspringData := make([]cl.CL_uint, populationSize)
+	offspringData := make([]cl.CL_uint, pop.Size())
 
 	populationBuffer := cl.CLCreateBuffer(
 		context, cl.CL_MEM_READ_ONLY, dataSize, nil, &status)
@@ -312,7 +365,9 @@ func runOpenCL() {
 	// Step 6: Perform GOMEA.
 	//---------------------------------------------------
 
-	rand.Seed(2343)
+	fmt.Println(cl.ERROR_CODES_STRINGS[-cl.CL_DEVICE_NOT_FOUND])
+
+	rand.Seed(2243)
 
 	done := false
 
@@ -321,14 +376,7 @@ func runOpenCL() {
 	for !done {
 
 		if verbosity >= 3 {
-			fmt.Printf("Generation %d\n", numGenerations)
-			fmt.Println("===============")
-			for i, solution := range pop.Solutions {
-				solution.Fitness = Evaluate(4, solution.Bits)
-				fmt.Printf("x_%-2d: %v", i, solution)
-			}
-			fmt.Println("===============")
-			fmt.Println()
+			printGeneration(numGenerations, pop)
 		}
 
 		//---------------------------------------------------
@@ -339,16 +387,7 @@ func runOpenCL() {
 		lt := LinkageTree(pop, freqs)
 
 		// Store a flattened version of the linkage tree in memory.
-		ltPtr := 0
-		for _, node := range lt {
-			ltData[ltPtr] = cl.CL_uint(len(node))
-			for _, index := range node {
-				ltData[ltPtr] = cl.CL_uint(index)
-				ltPtr++
-			}
-		}
-		// null terminated
-		ltData[ltPtr] = 0
+		flattenIntoSlice(lt, ltData)
 
 		// Upload FOS.
 		status = cl.CLEnqueueWriteBuffer(
@@ -359,19 +398,7 @@ func runOpenCL() {
 			log.Fatal("Fatal error: could not write data to an OpenCL memory buffer.")
 		}
 
-		for i, solution := range pop.Solutions {
-			var raw uint32
-			raw = 0
-
-			var j uint32
-			for j = 0; j < 32; j++ {
-				if solution.Bits.Has(int(j)) {
-					raw |= (1 << j)
-				}
-			}
-
-			populationData[i] = cl.CL_uint(raw)
-		}
+		populationToSlice(pop, populationData)
 
 		status = cl.CLEnqueueWriteBuffer(
 			commandQueue, populationBuffer, cl.CL_TRUE, 0,
@@ -381,33 +408,14 @@ func runOpenCL() {
 			log.Fatal("Fatal error: could not write data to an OpenCL memory buffer.")
 		}
 
-		status = cl.CLSetKernelArg(
-			kernel, 0, cl.CL_size_t(unsafe.Sizeof(populationBuffer)),
-			unsafe.Pointer(&populationBuffer))
+		setKernelArg(kernel, 0, &populationBuffer)
 
-		if status != cl.CL_SUCCESS {
-			fmt.Println(status)
-			log.Fatal("Fatal error: could not set arg 0 for OpenCL kernel.")
-		}
+		setKernelArg(kernel, 1, &ltBuffer)
 
-		status = cl.CLSetKernelArg(
-			kernel, 1, cl.CL_size_t(unsafe.Sizeof(ltBuffer)),
-			unsafe.Pointer(&ltBuffer))
-
-		if status != cl.CL_SUCCESS {
-			log.Fatal("Fatal error: could not set arg 1 for OpenCL kernel.")
-		}
-
-		status = cl.CLSetKernelArg(
-			kernel, 2, cl.CL_size_t(unsafe.Sizeof(offspringBuffer)),
-			unsafe.Pointer(&offspringBuffer))
-
-		if status != cl.CL_SUCCESS {
-			log.Fatal("Fatal error: could not set arg 2 for OpenCL kernel.")
-		}
+		setKernelArg(kernel, 2, &offspringBuffer)
 
 		var globalWorkSize [1]cl.CL_size_t
-		globalWorkSize[0] = cl.CL_size_t(populationSize)
+		globalWorkSize[0] = cl.CL_size_t(pop.Size())
 
 		//---------------------------------------------------
 		// Step 7: Perform GOM crossover.
