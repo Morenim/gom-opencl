@@ -12,7 +12,8 @@ import (
 )
 
 var (
-	useCPU bool
+	useCPU    bool
+	verbosity int
 )
 
 func Evaluate(k int, bits bitset.BitSet) (fitness float64) {
@@ -116,6 +117,8 @@ func findDevice(platforms []cl.CL_platform_id, deviceType cl.CL_device_type) (pl
 func parseCommandLine() {
 
 	flag.BoolVar(&useCPU, "cpu", false, "Whether to use the CPU over the GPU.")
+
+	flag.IntVar(&verbosity, "verbosity", 0, "Verbosity of the output.")
 
 	flag.Parse()
 }
@@ -276,20 +279,6 @@ func runOpenCL() {
 
 	populationData := make([]cl.CL_uint, populationSize)
 
-	for i, solution := range pop.Solutions {
-		var raw uint32
-		raw = 0
-
-		var j uint32
-		for j = 0; j < 32; j++ {
-			if solution.Bits.Has(int(j)) {
-				raw |= (1 << j)
-			}
-		}
-
-		populationData[i] = cl.CL_uint(raw)
-	}
-
 	offspringData := make([]cl.CL_uint, populationSize)
 
 	populationBuffer := cl.CLCreateBuffer(
@@ -327,7 +316,20 @@ func runOpenCL() {
 
 	done := false
 
+	numGenerations := 0
+
 	for !done {
+
+		if verbosity >= 3 {
+			fmt.Printf("Generation %d\n", numGenerations)
+			fmt.Println("===============")
+			for i, solution := range pop.Solutions {
+				solution.Fitness = Evaluate(4, solution.Bits)
+				fmt.Printf("x_%-2d: %v", i, solution)
+			}
+			fmt.Println("===============")
+			fmt.Println()
+		}
 
 		//---------------------------------------------------
 		// Step 5: Initialize the LTGA.
@@ -355,6 +357,20 @@ func runOpenCL() {
 
 		if status != cl.CL_SUCCESS {
 			log.Fatal("Fatal error: could not write data to an OpenCL memory buffer.")
+		}
+
+		for i, solution := range pop.Solutions {
+			var raw uint32
+			raw = 0
+
+			var j uint32
+			for j = 0; j < 32; j++ {
+				if solution.Bits.Has(int(j)) {
+					raw |= (1 << j)
+				}
+			}
+
+			populationData[i] = cl.CL_uint(raw)
 		}
 
 		status = cl.CLEnqueueWriteBuffer(
@@ -413,13 +429,17 @@ func runOpenCL() {
 			log.Fatal("Fatal error: reading a buffer failed.")
 		}
 
-		for i, fitness := range offspringData {
-			log.Printf("dt(%-2d) = %-2d, bits = %032b, out(%-2d) = %-2d",
-				i, int(Evaluate(4, pop.Solutions[i].Bits)),
-				populationData[i], i, fitness)
+		for i, offspring := range offspringData {
+			pop.Solutions[i].Bits, _ = bitset.FromString(fmt.Sprintf("%032b", uint(offspring)))
+			pop.Solutions[i].Fitness = Evaluate(4, pop.Solutions[i].Bits)
 		}
 
-		done = true
+		numGenerations++
+
+		// TODO: Termination Criterion
+		if numGenerations == 10 {
+			done = true
+		}
 	}
 }
 

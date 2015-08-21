@@ -31,12 +31,41 @@ uint deceptive (__read_only uint solution)
   return fitness;
 }
 
-__kernel void gom (__global uint *population, __global uint *fos, __global uint *offspring)
+__kernel void gom (global read_only uint *population, global read_only uint *fos, global write_only uint *offspring)
 {
-  int v = get_global_id (0);
+  int gid = get_global_id (0);
   
-  for (uint i = 0; i < 1; i++)
+  uint solution = population[gid];
+  uint fitness = deceptive(population[gid]);
+
+  uint fosPtr = 0;
+
+  while (fos[fosPtr] != 0)
   {
-    offspring[v] = deceptive(population[v]);
+    uint size = fos[fosPtr];
+    fosPtr++;
+
+    // Select a 'random' donor.
+    uint rand = (gid * 13 + 7 * fosPtr) % 32;
+
+    // Create mask from FOS.
+    uint mask = 0;
+    for (uint i = 0; i < size; i++)
+      mask |= 1 << fos[fosPtr + i];
+
+    // Copy donor bits into the solution.
+    uint clone = (solution & ~mask) | (population[rand] & mask);
+
+    uint newFitness = deceptive(clone);
+
+    if (newFitness >= fitness)
+    {
+      fitness = newFitness;
+      solution = clone;
+    }
+
+    fosPtr += size;
   }
+
+  offspring[gid] = solution;
 }
