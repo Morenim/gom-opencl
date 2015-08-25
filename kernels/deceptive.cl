@@ -31,7 +31,7 @@ uint deceptive (__read_only uint solution)
   return fitness;
 }
 
-kernel void gom (global uint *population, const uint population_size, global uint *fos, global write_only uint *offspring)
+kernel void gom (global uint *population, uint population_size, global uint *fos, global write_only uint *offspring)
 {
   int gid = get_global_id (0);
   

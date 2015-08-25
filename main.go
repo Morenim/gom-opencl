@@ -410,8 +410,9 @@ func runOpenCL() {
 
 		setKernelArg(kernel, 0, &populationBuffer)
 
+		clSize := cl.CL_uint(populationSize)
 		status := cl.CLSetKernelArg(
-			kernel, 1, cl.CL_size_t(unsafe.Sizeof(popSize)),
+			kernel, 1, cl.CL_size_t(unsafe.Sizeof(clSize)),
 			unsafe.Pointer(&popSize))
 
 		if status != cl.CL_SUCCESS {
