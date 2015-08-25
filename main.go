@@ -188,7 +188,7 @@ func setKernelArg(kernel cl.CL_kernel, pos int, data *cl.CL_mem) {
 		unsafe.Pointer(data))
 
 	if status != cl.CL_SUCCESS {
-		log.Fatal("Fatal error: could not set arg %d for OpenCL kernel.", pos)
+		log.Fatalf("Fatal error: could not set arg %d for OpenCL kernel.", pos)
 	}
 }
 
@@ -221,7 +221,9 @@ func runOpenCL() {
 		log.Fatalf("Fatal error: could not retrieve OpenCL platform IDs.")
 	}
 
-	printPlatforms(platforms)
+	if verbosity >= 2 {
+		printPlatforms(platforms)
+	}
 
 	//---------------------------------------------------
 	// Step 2: Discover and retrieve OpenCL devices.
@@ -342,7 +344,7 @@ func runOpenCL() {
 	}
 
 	// Maximum bound on the number of elements in the LT + node sizes.
-	boundSum := (length*length+3*length-2)/2 + (2*length - 1)
+	boundSum := (length*length+3*length-2)/2 + (2*length - 1) + 1
 	ltSize := cl.CL_size_t(unsafe.Sizeof(length)) * boundSum
 
 	ltData := make([]cl.CL_uint, boundSum)
@@ -364,8 +366,6 @@ func runOpenCL() {
 	//---------------------------------------------------
 	// Step 6: Perform GOMEA.
 	//---------------------------------------------------
-
-	fmt.Println(cl.ERROR_CODES_STRINGS[-cl.CL_DEVICE_NOT_FOUND])
 
 	rand.Seed(2243)
 
@@ -410,9 +410,18 @@ func runOpenCL() {
 
 		setKernelArg(kernel, 0, &populationBuffer)
 
-		setKernelArg(kernel, 1, &ltBuffer)
+		status := cl.CLSetKernelArg(
+			kernel, 1, cl.CL_size_t(unsafe.Sizeof(popSize)),
+			unsafe.Pointer(&popSize))
 
-		setKernelArg(kernel, 2, &offspringBuffer)
+		if status != cl.CL_SUCCESS {
+			log.Printf("%v", cl.ERROR_CODES_STRINGS[-status])
+			log.Fatalf("Fatal error: could not set arg %d for OpenCL kernel.", 1)
+		}
+
+		setKernelArg(kernel, 2, &ltBuffer)
+
+		setKernelArg(kernel, 3, &offspringBuffer)
 
 		var globalWorkSize [1]cl.CL_size_t
 		globalWorkSize[0] = cl.CL_size_t(pop.Size())
@@ -427,6 +436,12 @@ func runOpenCL() {
 
 		if status != cl.CL_SUCCESS {
 			log.Fatal("Fatal error: could not enqueue OpenCL kernel.")
+		}
+
+		status = cl.CLFinish(commandQueue)
+
+		if status != cl.CL_SUCCESS {
+			log.Fatal("Fatal error: could not finish command queue.")
 		}
 
 		cl.CLEnqueueReadBuffer(
