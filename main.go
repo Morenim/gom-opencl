@@ -249,6 +249,23 @@ func setKernelArg(kernel cl.CL_kernel, pos int, data *cl.CL_mem) {
 	}
 }
 
+func printProgramInfo(program cl.CL_program, name cl.CL_program_info) string {
+
+	var buffer interface{}
+	var size cl.CL_size_t
+
+	status := cl.CLGetProgramInfo(program, name, 0, nil, &size)
+
+	status = cl.CLGetProgramInfo(program, cl.CL_PROGRAM_SOURCE, size, &buffer, nil)
+
+	if status != cl.CL_SUCCESS {
+		log.Printf("%s", cl.ERROR_CODES_STRINGS[-status])
+		log.Fatal("Fatal error: could not retrieve program info.")
+	}
+
+	return fmt.Sprintf("%s", buffer.(string))
+}
+
 func parseCommandLine() {
 
 	flag.BoolVar(&useCPU, "cpu", false, "Whether to use the CPU over the GPU.")
@@ -338,22 +355,30 @@ func runOpenCL() {
 	// Step 4: Create OpenCL program and kernel.
 	//---------------------------------------------------
 
-	var kernelSource [1][]byte
-	var kernelLength [1]cl.CL_size_t
-	filename := "kernels/deceptive.cl"
+	var clSourceData [3][]byte
+	var clSourceLengths [3]cl.CL_size_t
+	var err error
 
-	kernelData, err := ioutil.ReadFile(filename)
-
-	if err != nil {
-		log.Fatalf("Could not read the kernel file %s.", filename)
+	clSourceFiles := []string{
+		"kernels/deceptive_trap.cl",
+		"kernels/rng.cl",
+		"kernels/gom.cl",
 	}
 
-	kernelSource[0] = kernelData
-	kernelLength[0] = cl.CL_size_t(len(kernelSource[0]))
+	for i, s := range clSourceFiles {
+		clSourceData[i], err = ioutil.ReadFile(s)
 
-	program := cl.CLCreateProgramWithSource(context, 1, kernelSource[:], kernelLength[:], &status)
+		if err != nil {
+			log.Fatalf("Could not read the kernel source file %s.", s)
+		}
+
+		clSourceLengths[i] = cl.CL_size_t(len(clSourceData[i]))
+	}
+
+	program := cl.CLCreateProgramWithSource(context, 3, clSourceData[:], clSourceLengths[:], &status)
 
 	if status != cl.CL_SUCCESS {
+		log.Printf("%s", deviceErrorMap[status])
 		log.Fatal("Fatal error: could not compile an OpenCL kernel from source.")
 	}
 

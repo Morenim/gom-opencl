@@ -1,41 +1,10 @@
-#include "kernels/rng.cl"
-
-uint deceptive(read_only uint solution)
-{
-  uint fitness = 0;
-  uint k = 4;
-  uint numTraps = 32 >> 2;
-
-  uint z = 1;
-  for (uint i = 0; i < numTraps; i++)
-  {
-    uint t = 0;
-    for (uint j = 0; j < k; j++)
-    {
-      t += (z & solution) ? 1 : 0;
-      z <<= 1;
-    }
-
-    if(t == k) 
-    {
-      fitness += k;
-    }
-    else
-    {
-      fitness += k - t - 1;
-    }
-  }
-
-  return fitness;
-}
-
-
+// Implements the core functionality of the GOMEA algorithm.
 kernel void gom(global uint *population, uint population_size, global uint *fos, global write_only uint *offspring)
 {
   int gid = get_global_id (0);
   
   uint solution = population[gid];
-  uint fitness = deceptive(solution);
+  uint fitness = evaluate(solution);
   uint4 rng_state = rng(gid);
 
   uint fosPtr = 0;
@@ -57,7 +26,7 @@ kernel void gom(global uint *population, uint population_size, global uint *fos,
     // Copy donor bits into the solution.
     uint clone = (solution & ~mask) | (population[rand] & mask);
 
-    uint newFitness = deceptive(clone);
+    uint newFitness = evaluate(clone);
 
     if (newFitness >= fitness)
     {
