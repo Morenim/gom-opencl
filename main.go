@@ -8,12 +8,16 @@ import (
 	"io/ioutil"
 	"log"
 	"math/rand"
+	"time"
 	"unsafe"
 )
 
 var (
-	useCPU    bool
-	verbosity int
+	useCPU         bool
+	verbosity      int
+	randomSeed     int
+	populationSize int
+	numGenerations int
 )
 
 func Evaluate(k int, bits bitset.BitSet) (fitness float64) {
@@ -198,6 +202,12 @@ func parseCommandLine() {
 
 	flag.IntVar(&verbosity, "verbosity", 0, "Verbosity of the output.")
 
+	flag.IntVar(&randomSeed, "random", 0, "Random seed to use. Defaults to a time-based random seed.")
+
+	flag.IntVar(&populationSize, "size", 64, "Number of solutions in the fixed-size population.")
+
+	flag.IntVar(&numGenerations, "generations", 10, "Maximum number of generations to perform for GOMEA.")
+
 	flag.Parse()
 }
 
@@ -321,8 +331,6 @@ func runOpenCL() {
 	// Step 6: Initialize OpenCL memory.
 	//---------------------------------------------------
 
-	populationSize := 32
-
 	var size cl.CL_uint
 	popSize := cl.CL_size_t(populationSize)
 	problemLength := 32
@@ -367,21 +375,23 @@ func runOpenCL() {
 	// Step 6: Perform GOMEA.
 	//---------------------------------------------------
 
-	rand.Seed(2243)
+	if randomSeed == 0 {
+		rand.Seed(time.Now().Unix())
+	} else {
+		rand.Seed(int64(randomSeed))
+	}
 
 	done := false
 
-	numGenerations := 0
+	generationsPassed := 0
 
 	for !done {
 
-		if verbosity >= 3 {
-			printGeneration(numGenerations, pop)
+		if (verbosity == 2 && generationsPassed == numGenerations-1) || (verbosity == 3) {
+			printGeneration(generationsPassed, pop)
 		}
 
-		//---------------------------------------------------
-		// Step 5: Initialize the LTGA.
-		//---------------------------------------------------
+		// Build the linkage tree.
 		freqs := Frequencies(pop)
 
 		lt := LinkageTree(pop, freqs)
@@ -408,6 +418,7 @@ func runOpenCL() {
 			log.Fatal("Fatal error: could not write data to an OpenCL memory buffer.")
 		}
 
+		// Set the GOM kernel arguments.
 		setKernelArg(kernel, 0, &populationBuffer)
 
 		clSize := cl.CL_uint(populationSize)
@@ -421,16 +432,12 @@ func runOpenCL() {
 		}
 
 		setKernelArg(kernel, 2, &ltBuffer)
-
 		setKernelArg(kernel, 3, &offspringBuffer)
 
 		var globalWorkSize [1]cl.CL_size_t
 		globalWorkSize[0] = cl.CL_size_t(pop.Size())
 
-		//---------------------------------------------------
-		// Step 7: Perform GOM crossover.
-		//---------------------------------------------------
-
+		// Perform GOM crossover.
 		status = cl.CLEnqueueNDRangeKernel(
 			commandQueue, kernel, 1, nil, globalWorkSize[:],
 			nil, 0, nil, nil)
@@ -445,6 +452,7 @@ func runOpenCL() {
 			log.Fatal("Fatal error: could not finish command queue.")
 		}
 
+		// Retrieve the offspring population from the compute device.
 		cl.CLEnqueueReadBuffer(
 			commandQueue, offspringBuffer, cl.CL_TRUE, 0,
 			dataSize, unsafe.Pointer(&offspringData[0]), 0, nil, nil)
@@ -458,10 +466,10 @@ func runOpenCL() {
 			pop.Solutions[i].Fitness = Evaluate(4, pop.Solutions[i].Bits)
 		}
 
-		numGenerations++
+		generationsPassed++
 
 		// TODO: Termination Criterion
-		if numGenerations == 10 {
+		if generationsPassed == numGenerations {
 			done = true
 		}
 	}
