@@ -1,8 +1,6 @@
-__constant int problemLength;
-__constant int populationSize;
-__constant int fosSize;
+#include "kernels/rng.cl"
 
-uint deceptive (__read_only uint solution)
+uint deceptive(read_only uint solution)
 {
   uint fitness = 0;
   uint k = 4;
@@ -31,12 +29,14 @@ uint deceptive (__read_only uint solution)
   return fitness;
 }
 
-kernel void gom (global uint *population, uint population_size, global uint *fos, global write_only uint *offspring)
+
+kernel void gom(global uint *population, uint population_size, global uint *fos, global write_only uint *offspring)
 {
   int gid = get_global_id (0);
   
   uint solution = population[gid];
   uint fitness = deceptive(solution);
+  uint4 rng_state = rng(gid);
 
   uint fosPtr = 0;
 
@@ -46,7 +46,8 @@ kernel void gom (global uint *population, uint population_size, global uint *fos
     fosPtr++;
 
     // Select a 'random' donor.
-    uint rand = (gid * 13 + 7 * fosPtr) % population_size;
+    //uint rand = (gid * 13 + 7 * fosPtr) % population_size;
+    uint rand = randrange(&rng_state, 0, population_size - 1);
 
     // Create mask from FOS.
     uint mask = 0;
