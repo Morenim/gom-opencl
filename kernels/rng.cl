@@ -25,9 +25,9 @@ uint randrange(uint4 *state, int x, int y)
 }
 
 // Returns a random number in the range [0, 1].
-float rand()
+float rand(uint4 *state)
 {
-  return randint() * (1f / 4294967296f);
+  return randint(state) * (1.0f / 4294967296.0f);
 }
 
 uint4 rng(ulong seed) 
