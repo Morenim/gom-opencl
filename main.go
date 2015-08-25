@@ -18,6 +18,7 @@ var (
 	randomSeed     int
 	populationSize int
 	numGenerations int
+	problemLength  int
 )
 
 func Evaluate(k int, bits bitset.BitSet) (fitness float64) {
@@ -146,6 +147,36 @@ func printPlatforms(platforms []cl.CL_platform_id) {
 	}
 }
 
+func printDeviceInfo(device cl.CL_device_id) {
+	var buffer interface{}
+
+	getParam := func(name cl.CL_device_info) interface{} {
+		status := cl.CLGetDeviceInfo(device, name, 128, &buffer, nil)
+
+		if status != cl.CL_SUCCESS {
+			log.Printf("%s", deviceErrorMap[status])
+			log.Fatalf("Fatal error: could not retrieve work group information for kernel.")
+		}
+
+		return buffer
+	}
+
+	log.Printf("Chosen Device Info:")
+	switch getParam(cl.CL_DEVICE_TYPE) {
+	case cl.CL_DEVICE_TYPE_GPU:
+		log.Printf("\t%-11s: %v", "Type", "GPU")
+	case cl.CL_DEVICE_TYPE_CPU:
+		log.Printf("\t%-11s: %v", "Type", "CPU")
+	}
+	log.Printf("\t%-11s: %v", "Max Compute Units", getParam(cl.CL_DEVICE_MAX_COMPUTE_UNITS))
+	log.Printf("\t%-11s: %v", "Max Work Group Size", getParam(cl.CL_DEVICE_MAX_WORK_GROUP_SIZE))
+	log.Printf("\t%-11s: %v", "Max Work Item Dimensions", getParam(cl.CL_DEVICE_MAX_WORK_ITEM_DIMENSIONS))
+	log.Printf("\t%-11s: %v", "Max Mem Alloc Size", getParam(cl.CL_DEVICE_MAX_MEM_ALLOC_SIZE))
+	//log.Printf("\t%-11s: %v", "Max Write Image Args", getParam(cl.CL_DEVICE_MAX_READ_IMAGE_ARGS))
+	//log.Printf("\t%-11s: %v", "Max Image2D Width", getParam(cl.CL_DEVICE_IMAGE2D_MAX_WIDTH))
+	//log.Printf("\t%-11s: %v", "Max Image2D Height", getParam(cl.CL_DEVICE_IMAGE2D_MAX_HEIGHT))
+}
+
 func printKernelWorkGroup(kernel cl.CL_kernel, device cl.CL_device_id) {
 
 	var buffer interface{}
@@ -230,6 +261,8 @@ func parseCommandLine() {
 
 	flag.IntVar(&numGenerations, "generations", 10, "Maximum number of generations to perform for GOMEA.")
 
+	flag.IntVar(&problemLength, "length", 32, "Length of the optimization problem.")
+
 	flag.Parse()
 }
 
@@ -272,6 +305,10 @@ func runOpenCL() {
 	_, gpuDevice := findDevice(platforms, preferredType)
 	gpuDevices := make([]cl.CL_device_id, 1)
 	gpuDevices[0] = gpuDevice
+
+	if verbosity >= 1 {
+		printDeviceInfo(gpuDevice)
+	}
 
 	//---------------------------------------------------
 	// Step 3: Create an OpenCL context.
@@ -363,7 +400,6 @@ func runOpenCL() {
 
 	var size cl.CL_uint
 	popSize := cl.CL_size_t(populationSize)
-	problemLength := 32
 	length := cl.CL_size_t(problemLength)
 
 	pop := NewPopulation(populationSize, problemLength)
