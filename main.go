@@ -146,6 +146,28 @@ func printPlatforms(platforms []cl.CL_platform_id) {
 	}
 }
 
+func printKernelWorkGroup(kernel cl.CL_kernel, device cl.CL_device_id) {
+
+	var buffer interface{}
+
+	getParam := func(name cl.CL_kernel_work_group_info) interface{} {
+		status := cl.CLGetKernelWorkGroupInfo(kernel, device, name, 12, &buffer, nil)
+
+		if status != cl.CL_SUCCESS {
+			log.Printf("%s", deviceErrorMap[status])
+			log.Fatalf("Fatal error: could not retrieve work group information for kernel.")
+		}
+
+		return buffer
+	}
+
+	log.Printf("Kernel Work Group Information:")
+	log.Printf("\t%-11s: %v", "Work Group Size", getParam(cl.CL_KERNEL_WORK_GROUP_SIZE))
+	log.Printf("\t%-11s: %v", "Local Memory Size", getParam(cl.CL_KERNEL_LOCAL_MEM_SIZE))
+	log.Printf("\t%-11s: %v", "Private Memory Size", getParam(cl.CL_KERNEL_PRIVATE_MEM_SIZE))
+	log.Printf("\t%-11s: %v", "Preferred Work Group Size Multiple", getParam(cl.CL_KERNEL_PREFERRED_WORK_GROUP_SIZE_MULTIPLE))
+}
+
 func printGeneration(numGenerations int, pop *Population) {
 	fmt.Printf("Generation %d\n", numGenerations)
 	fmt.Println("===============")
@@ -331,6 +353,14 @@ func runOpenCL() {
 	// Step 6: Initialize OpenCL memory.
 	//---------------------------------------------------
 
+	if verbosity >= 1 {
+		printKernelWorkGroup(kernel, gpuDevice)
+	}
+
+	//---------------------------------------------------
+	// Step 7: Initialize OpenCL memory.
+	//---------------------------------------------------
+
 	var size cl.CL_uint
 	popSize := cl.CL_size_t(populationSize)
 	problemLength := 32
@@ -372,7 +402,7 @@ func runOpenCL() {
 	}
 
 	//---------------------------------------------------
-	// Step 6: Perform GOMEA.
+	// Step 8: Perform GOMEA.
 	//---------------------------------------------------
 
 	if randomSeed == 0 {
