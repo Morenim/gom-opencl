@@ -7,24 +7,23 @@ kernel void gom(global uint *population, uint population_size, global uint *fos,
   uint fitness = evaluate(solution);
   uint4 rng_state = rng(gid);
 
-  uint fosPtr = 0;
+  uint fos_size = fos[0];
+  uint fos_ptr = 1;
 
-  while (fos[fosPtr] != 0)
+  for (uint fos_index = 0; fos_index < fos_size; ++fos_index)
   {
-    uint subsetSize = fos[fosPtr];
-    fosPtr++;
-
-    // Select a 'random' donor.
-    //uint rand = (gid * 13 + 7 * fosPtr) % population_size;
     uint rand = randrange(&rng_state, 0, population_size - 1);
+    uint numMasks = fos[fos_ptr];
+    uint clone = 0;
+    ++fos_ptr;
 
-    // Create mask from FOS.
-    uint mask = 0;
-    for (uint i = 0; i < subsetSize; i++)
-      mask |= 1 << fos[fosPtr + i];
-
-    // Copy donor bits into the solution.
-    uint clone = (solution & ~mask) | (population[rand] & mask);
+    for (uint j = 0; j < numMasks; j++)
+    {
+      uint mask_index = fos[fos_ptr];
+      uint mask = fos[fos_ptr + 1];
+      clone = (solution & ~mask) | (population[rand] & mask);
+      fos_ptr += 2;
+    }
 
     uint newFitness = evaluate(clone);
 
@@ -33,8 +32,6 @@ kernel void gom(global uint *population, uint population_size, global uint *fos,
       fitness = newFitness;
       solution = clone;
     }
-
-    fosPtr += subsetSize;
   }
 
   offspring[gid] = solution;

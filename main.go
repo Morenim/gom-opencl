@@ -77,12 +77,7 @@ func findDevice(platforms []cl.CL_platform_id, deviceType cl.CL_device_type) (pl
 		var numDevices cl.CL_uint
 
 		// Get the number of matching devices for the platform.
-		status := cl.CLGetDeviceIDs(
-			platform,
-			deviceType,
-			0,
-			nil,
-			&numDevices)
+		status := cl.CLGetDeviceIDs(platform, deviceType, 0, nil, &numDevices)
 
 		// Check for errors, continue to next platform if no matching device was found.
 		switch status {
@@ -211,15 +206,34 @@ func printGeneration(numGenerations int, pop *Population) {
 }
 
 func flattenIntoSlice(src [][]int, dest []cl.CL_uint) {
-	i := 0
+
+	dest[0] = cl.CL_uint(len(src))
+	i := 1
 	for _, node := range src {
-		dest[i] = cl.CL_uint(len(node))
-		for _, index := range node {
-			dest[i] = cl.CL_uint(index)
-			i++
+		j := 0
+		numMasks := 0
+		start := i // Reserve index for number of masks.
+		i++
+
+		for j < len(node) {
+			maskIndex := uint32(node[j] >> 5) // index of mask to create
+			mask := uint32(0)
+
+			// Create a mask from all indices belonging to the block of bits.
+			for j < len(node) && (uint32(node[j])>>5) == maskIndex {
+				mask |= 1 << (uint32(node[j]) & 31)
+				j++
+			}
+
+			// Append the mask to the flattened FOS>
+			dest[i] = cl.CL_uint(maskIndex)
+			dest[i+1] = cl.CL_uint(mask)
+			i += 2
+			numMasks++
 		}
+
+		dest[start] = cl.CL_uint(numMasks)
 	}
-	dest[i] = 0
 }
 
 func populationToSlice(pop *Population, dest []cl.CL_uint) {
@@ -246,6 +260,7 @@ func setKernelArg(kernel cl.CL_kernel, pos int, data *cl.CL_mem) {
 
 	if status != cl.CL_SUCCESS {
 		log.Fatalf("Fatal error: could not set arg %d for OpenCL kernel.", pos)
+
 	}
 }
 
@@ -487,8 +502,12 @@ func runOpenCL() {
 
 		lt := LinkageTree(pop, freqs)
 
+		//log.Printf("%v", lt)
+
 		// Store a flattened version of the linkage tree in memory.
 		flattenIntoSlice(lt, ltData)
+
+		//log.Printf("%v", ltData)
 
 		// Upload FOS.
 		status = cl.CLEnqueueWriteBuffer(
@@ -540,6 +559,7 @@ func runOpenCL() {
 		status = cl.CLFinish(commandQueue)
 
 		if status != cl.CL_SUCCESS {
+			log.Printf("%s", cl.ERROR_CODES_STRINGS[-status])
 			log.Fatal("Fatal error: could not finish command queue.")
 		}
 
