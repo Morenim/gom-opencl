@@ -191,6 +191,24 @@ func neighbour(index int, sm *matrix, mpm [][]int) int {
 	return s
 }
 
+func mergeClusters(left, right []int) []int {
+
+	a, b := 0, 0
+	dest := make([]int, len(left)+len(right))
+
+	for i := 0; i < len(dest); i++ {
+		if b == len(right) || (a < len(left) && left[a] < right[b]) {
+			dest[i] = left[a]
+			a++
+		} else {
+			dest[i] = right[b]
+			b++
+		}
+	}
+
+	return dest
+}
+
 func LinkageTree(pop *Population, frequencies [][][]int) [][]int {
 
 	// Validate Input
@@ -279,7 +297,8 @@ func LinkageTree(pop *Population, frequencies [][][]int) [][]int {
 
 		if r1 < len(mpm) {
 			// Merge the two subsets at the end of the chain.
-			subset := append(mpm[r0], mpm[r1]...)
+			//subset := append(mpm[r0], mpm[r1]...)
+			subset := mergeClusters(mpm[r0], mpm[r1])
 
 			fos = append(fos, subset)
 
