@@ -167,6 +167,8 @@ func printDeviceInfo(device cl.CL_device_id) {
 	log.Printf("\t%-11s: %v", "Max Work Group Size", getParam(cl.CL_DEVICE_MAX_WORK_GROUP_SIZE))
 	log.Printf("\t%-11s: %v", "Max Work Item Dimensions", getParam(cl.CL_DEVICE_MAX_WORK_ITEM_DIMENSIONS))
 	log.Printf("\t%-11s: %v", "Max Mem Alloc Size", getParam(cl.CL_DEVICE_MAX_MEM_ALLOC_SIZE))
+	log.Printf("\t%-11s: %v", "Local Mem Size", getParam(cl.CL_DEVICE_LOCAL_MEM_SIZE))
+
 	//log.Printf("\t%-11s: %v", "Max Write Image Args", getParam(cl.CL_DEVICE_MAX_READ_IMAGE_ARGS))
 	//log.Printf("\t%-11s: %v", "Max Image2D Width", getParam(cl.CL_DEVICE_IMAGE2D_MAX_WIDTH))
 	//log.Printf("\t%-11s: %v", "Max Image2D Height", getParam(cl.CL_DEVICE_IMAGE2D_MAX_HEIGHT))
@@ -225,7 +227,7 @@ func flattenIntoSlice(src [][]int, dest []cl.CL_uint) {
 				j++
 			}
 
-			// Append the mask to the flattened FOS>
+			// Append the mask to the flattened FOS.
 			dest[i] = cl.CL_uint(maskIndex)
 			dest[i+1] = cl.CL_uint(mask)
 			i += 2
@@ -238,29 +240,73 @@ func flattenIntoSlice(src [][]int, dest []cl.CL_uint) {
 
 func populationToSlice(pop *Population, dest []cl.CL_uint) {
 
-	for i, solution := range pop.Solutions {
-		var raw uint32
-		raw = 0
+	destPtr := 0
+	length := pop.Length()
+	numBlocks := blocksPerSolution(pop)
 
-		var j uint32
-		for j = 0; j < 32; j++ {
-			if solution.Bits.Has(int(j)) {
-				raw |= (1 << j)
+	for _, solution := range pop.Solutions {
+		toCopy := length
+
+		for j := 0; j < numBlocks; j++ {
+			// Determine the number of bits to copy.
+			blockSize := 32
+			if toCopy < 32 {
+				blockSize = toCopy
 			}
-		}
+			toCopy -= blockSize
 
-		dest[i] = cl.CL_uint(raw)
+			// Copy the bits into 32-bit integer.
+			var raw uint32
+			raw = 0
+
+			for k := 0; k < blockSize; k++ {
+				index := j*32 + k
+				if solution.Bits.Has(index) {
+					raw |= (1 << uint32(k))
+				}
+			}
+
+			dest[destPtr] = cl.CL_uint(raw)
+			destPtr++
+		}
 	}
 }
 
-func setKernelArg(kernel cl.CL_kernel, pos int, data *cl.CL_mem) {
-	status := cl.CLSetKernelArg(
-		kernel, cl.CL_uint(pos), cl.CL_size_t(unsafe.Sizeof(data)),
-		unsafe.Pointer(data))
+func sliceToPopulation(src []cl.CL_uint, pop *Population) {
+
+	numBlocks := blocksPerSolution(pop)
+	buffer := make([]uint32, numBlocks)
+
+	for i, _ := range pop.Solutions {
+		for j := 0; j < numBlocks; j++ {
+			buffer[j] = uint32(src[i*numBlocks+j])
+		}
+		pop.Solutions[i].Bits, _ = bitset.FromUInt32s(buffer, pop.Length())
+		pop.Solutions[i].Fitness = Evaluate(4, pop.Solutions[i].Bits)
+	}
+}
+
+func setKernelArg(kernel cl.CL_kernel, pos int, data interface{}) {
+
+	var status cl.CL_int
+
+	switch data := data.(type) {
+	case *cl.CL_mem:
+		status = cl.CLSetKernelArg(
+			kernel, cl.CL_uint(pos), cl.CL_size_t(unsafe.Sizeof(data)),
+			unsafe.Pointer(data))
+
+	case *cl.CL_uint:
+		status = cl.CLSetKernelArg(
+			kernel, cl.CL_uint(pos), cl.CL_size_t(unsafe.Sizeof(*data)),
+			unsafe.Pointer(data))
+	default:
+		log.Fatalf("Fatal error: setting kernel arg for unknown type %t.", data)
+	}
 
 	if status != cl.CL_SUCCESS {
+		log.Printf("%v", cl.ERROR_CODES_STRINGS[-status])
 		log.Fatalf("Fatal error: could not set arg %d for OpenCL kernel.", pos)
-
 	}
 }
 
@@ -281,6 +327,25 @@ func printProgramInfo(program cl.CL_program, name cl.CL_program_info) string {
 	return fmt.Sprintf("%s", buffer.(string))
 }
 
+func printProgramBuildInfo(program cl.CL_program, device cl.CL_device_id) {
+
+	var numChars cl.CL_size_t
+	var info interface{}
+
+	err := "could not retrieve OpenCL program build info."
+
+	requireSuccess(cl.CLGetProgramBuildInfo(
+		program, device, cl.CL_PROGRAM_BUILD_LOG,
+		0, nil, &numChars), err)
+
+	requireSuccess(cl.CLGetProgramBuildInfo(
+		program, device, cl.CL_PROGRAM_BUILD_LOG,
+		numChars, &info, nil), err)
+
+	log.Print("Fatal error: could not build OpenCL program.")
+	log.Fatalf("%s", info.(string))
+}
+
 func parseCommandLine() {
 
 	flag.BoolVar(&useCPU, "cpu", false, "Whether to use the CPU over the GPU.")
@@ -298,6 +363,17 @@ func parseCommandLine() {
 	flag.Parse()
 }
 
+func blocksPerSolution(pop *Population) int {
+	return ((pop.Length() - 1) >> 5) + 1
+}
+
+func requireSuccess(status cl.CL_int, customError string) {
+	if status != cl.CL_SUCCESS {
+		log.Printf("OpenCL failed with status code: %s", cl.ERROR_CODES_STRINGS[-status])
+		log.Fatalf("Fatal error: %s", customError)
+	}
+}
+
 func runOpenCL() {
 
 	var status cl.CL_int
@@ -312,13 +388,10 @@ func runOpenCL() {
 
 	platforms := make([]cl.CL_platform_id, numPlatforms)
 
-	status = cl.CLGetPlatformIDs(numPlatforms, platforms, nil)
+	requireSuccess(cl.CLGetPlatformIDs(numPlatforms, platforms, nil),
+		"could not retrieve OpenCL platform IDs.")
 
-	if status != cl.CL_SUCCESS {
-		log.Fatalf("Fatal error: could not retrieve OpenCL platform IDs.")
-	}
-
-	if verbosity >= 2 {
+	if verbosity >= 4 {
 		printPlatforms(platforms)
 	}
 
@@ -338,7 +411,7 @@ func runOpenCL() {
 	gpuDevices := make([]cl.CL_device_id, 1)
 	gpuDevices[0] = gpuDevice
 
-	if verbosity >= 1 {
+	if verbosity >= 4 {
 		printDeviceInfo(gpuDevice)
 	}
 
@@ -347,11 +420,7 @@ func runOpenCL() {
 	//---------------------------------------------------
 
 	context := cl.CLCreateContext(nil, 1, gpuDevices, nil, nil, &status)
-
-	if status != cl.CL_SUCCESS {
-		log.Fatalf("Fatal error: could not create OpenCL context.")
-	}
-
+	requireSuccess(status, "could not create OpenCL context.")
 	defer cl.CLReleaseContext(context)
 
 	//---------------------------------------------------
@@ -359,11 +428,7 @@ func runOpenCL() {
 	//---------------------------------------------------
 
 	commandQueue := cl.CLCreateCommandQueue(context, gpuDevice, 0, &status)
-
-	if status != cl.CL_SUCCESS {
-		log.Fatalf("Fatal error: could not create OpenCL command queue.")
-	}
-
+	requireSuccess(status, "could not create OpenCL command queue.")
 	defer cl.CLReleaseCommandQueue(commandQueue)
 
 	//---------------------------------------------------
@@ -391,46 +456,22 @@ func runOpenCL() {
 	}
 
 	program := cl.CLCreateProgramWithSource(context, 3, clSourceData[:], clSourceLengths[:], &status)
-
-	if status != cl.CL_SUCCESS {
-		log.Printf("%s", deviceErrorMap[status])
-		log.Fatal("Fatal error: could not compile an OpenCL kernel from source.")
-	}
+	requireSuccess(status, "could not compile an OpenCL kernel from source.")
 
 	status = cl.CLBuildProgram(program, 1, gpuDevices, nil, nil, nil)
 
 	if status != cl.CL_SUCCESS {
-		log.Print("Fatal error: could not build OpenCL program.")
-
-		var numChars cl.CL_size_t
-		var info interface{}
-
-		status = cl.CLGetProgramBuildInfo(
-			program, gpuDevice, cl.CL_PROGRAM_BUILD_LOG,
-			0, nil, &numChars)
-
-		status = cl.CLGetProgramBuildInfo(
-			program, gpuDevice, cl.CL_PROGRAM_BUILD_LOG,
-			numChars, &info, nil)
-
-		if status != cl.CL_SUCCESS {
-			log.Fatal("Fatal error: could not retrieve OpenCL program build info.")
-		}
-
-		log.Fatalf("%s", info.(string))
+		printProgramBuildInfo(program, gpuDevice)
 	}
 
 	kernel := cl.CLCreateKernel(program, []byte("gom"), &status)
-
-	if status != cl.CL_SUCCESS {
-		log.Fatal("Fatal error: could not create OpenCL kernel.")
-	}
+	requireSuccess(status, "could not create OpenCL kernel.")
 
 	//---------------------------------------------------
 	// Step 6: Initialize OpenCL memory.
 	//---------------------------------------------------
 
-	if verbosity >= 1 {
+	if verbosity >= 4 {
 		printKernelWorkGroup(kernel, gpuDevice)
 	}
 
@@ -439,23 +480,23 @@ func runOpenCL() {
 	//---------------------------------------------------
 
 	var size cl.CL_uint
-	popSize := cl.CL_size_t(populationSize)
 	length := cl.CL_size_t(problemLength)
 
 	pop := NewPopulation(populationSize, problemLength)
 
-	dataSize := cl.CL_size_t(unsafe.Sizeof(size)) * popSize
+	numBlocks := blocksPerSolution(pop) * pop.Size()
+	dataSize := cl.CL_size_t(unsafe.Sizeof(size)) * cl.CL_size_t(numBlocks)
 
-	populationData := make([]cl.CL_uint, pop.Size())
-
-	offspringData := make([]cl.CL_uint, pop.Size())
+	populationData := make([]cl.CL_uint, numBlocks)
+	offspringData := make([]cl.CL_uint, numBlocks)
 
 	populationBuffer := cl.CLCreateBuffer(
 		context, cl.CL_MEM_READ_ONLY, dataSize, nil, &status)
+	requireSuccess(status, "could not allocate an OpenCL memory buffer.")
 
-	if status != cl.CL_SUCCESS {
-		log.Fatal("Fatal error: could not allocate an OpenCL memory buffer.")
-	}
+	cloneBuffer := cl.CLCreateBuffer(
+		context, cl.CL_MEM_READ_WRITE, dataSize, nil, &status)
+	requireSuccess(status, "could not allocate an OpenCL memory buffer.")
 
 	// Maximum bound on the number of elements in the LT + node sizes.
 	boundSum := (length*length+3*length-2)/2 + (2*length - 1) + 1
@@ -463,19 +504,12 @@ func runOpenCL() {
 
 	ltData := make([]cl.CL_uint, boundSum)
 
-	ltBuffer := cl.CLCreateBuffer(
-		context, cl.CL_MEM_READ_ONLY, ltSize, nil, &status)
-
-	if status != cl.CL_SUCCESS {
-		log.Fatal("Fatal error: could not allocate an OpenCL memory buffer.")
-	}
+	ltBuffer := cl.CLCreateBuffer(context, cl.CL_MEM_READ_ONLY, ltSize, nil, &status)
+	requireSuccess(status, "could not allocate an OpenCL memory buffer.")
 
 	offspringBuffer := cl.CLCreateBuffer(
 		context, cl.CL_MEM_WRITE_ONLY, dataSize, nil, &status)
-
-	if status != cl.CL_SUCCESS {
-		log.Fatal("Fatal error: could not allocate an OpenCL memory buffer.")
-	}
+	requireSuccess(status, "could not allocate an OpenCL memory buffer.")
 
 	//---------------------------------------------------
 	// Step 8: Perform GOMEA.
@@ -497,85 +531,50 @@ func runOpenCL() {
 			printGeneration(generationsPassed, pop)
 		}
 
-		// Build the linkage tree.
+		// Build the linkage tree and upload a flattened version to the compute device.
 		freqs := Frequencies(pop)
-
 		lt := LinkageTree(pop, freqs)
-
-		//log.Printf("%v", lt)
-
-		// Store a flattened version of the linkage tree in memory.
 		flattenIntoSlice(lt, ltData)
-
-		//log.Printf("%v", ltData)
-
-		// Upload FOS.
-		status = cl.CLEnqueueWriteBuffer(
+		requireSuccess(cl.CLEnqueueWriteBuffer(
 			commandQueue, ltBuffer, cl.CL_TRUE, 0,
-			ltSize, unsafe.Pointer(&ltData[0]), 0, nil, nil)
+			ltSize, unsafe.Pointer(&ltData[0]), 0, nil, nil),
+			"could not write data to an OpenCL memory buffer.")
 
-		if status != cl.CL_SUCCESS {
-			log.Fatal("Fatal error: could not write data to an OpenCL memory buffer.")
-		}
-
+		// Store a flattened version of the population on the compute device.
 		populationToSlice(pop, populationData)
-
-		status = cl.CLEnqueueWriteBuffer(
+		requireSuccess(cl.CLEnqueueWriteBuffer(
 			commandQueue, populationBuffer, cl.CL_TRUE, 0,
-			dataSize, unsafe.Pointer(&populationData[0]), 0, nil, nil)
-
-		if status != cl.CL_SUCCESS {
-			log.Fatal("Fatal error: could not write data to an OpenCL memory buffer.")
-		}
+			dataSize, unsafe.Pointer(&populationData[0]), 0, nil, nil),
+			"could not write data to an OpenCL memory buffer.")
 
 		// Set the GOM kernel arguments.
+		popSize := cl.CL_uint(pop.Size())
+		solLength := cl.CL_uint(pop.Length())
 		setKernelArg(kernel, 0, &populationBuffer)
-
-		clSize := cl.CL_uint(populationSize)
-		status := cl.CLSetKernelArg(
-			kernel, 1, cl.CL_size_t(unsafe.Sizeof(clSize)),
-			unsafe.Pointer(&popSize))
-
-		if status != cl.CL_SUCCESS {
-			log.Printf("%v", cl.ERROR_CODES_STRINGS[-status])
-			log.Fatalf("Fatal error: could not set arg %d for OpenCL kernel.", 1)
-		}
-
-		setKernelArg(kernel, 2, &ltBuffer)
-		setKernelArg(kernel, 3, &offspringBuffer)
+		setKernelArg(kernel, 1, &popSize)
+		setKernelArg(kernel, 2, &solLength)
+		setKernelArg(kernel, 3, &cloneBuffer)
+		setKernelArg(kernel, 4, &ltBuffer)
+		setKernelArg(kernel, 5, &offspringBuffer)
 
 		var globalWorkSize [1]cl.CL_size_t
 		globalWorkSize[0] = cl.CL_size_t(pop.Size())
 
 		// Perform GOM crossover.
-		status = cl.CLEnqueueNDRangeKernel(
+		requireSuccess(cl.CLEnqueueNDRangeKernel(
 			commandQueue, kernel, 1, nil, globalWorkSize[:],
-			nil, 0, nil, nil)
+			nil, 0, nil, nil),
+			"could not enqueue OpenCL kernel.")
 
-		if status != cl.CL_SUCCESS {
-			log.Fatal("Fatal error: could not enqueue OpenCL kernel.")
-		}
-
-		status = cl.CLFinish(commandQueue)
-
-		if status != cl.CL_SUCCESS {
-			log.Printf("%s", cl.ERROR_CODES_STRINGS[-status])
-			log.Fatal("Fatal error: could not finish command queue.")
-		}
+		requireSuccess(cl.CLFinish(commandQueue), "could not finish command queue.")
 
 		// Retrieve the offspring population from the compute device.
-		cl.CLEnqueueReadBuffer(
+		requireSuccess(cl.CLEnqueueReadBuffer(
 			commandQueue, offspringBuffer, cl.CL_TRUE, 0,
-			dataSize, unsafe.Pointer(&offspringData[0]), 0, nil, nil)
+			dataSize, unsafe.Pointer(&offspringData[0]), 0, nil, nil),
+			"reading a buffer failed.")
 
-		if status != cl.CL_SUCCESS {
-			log.Fatal("Fatal error: reading a buffer failed.")
-		}
-
-		for i, offspring := range offspringData {
-			pop.Solutions[i].Bits, _ = bitset.FromString(fmt.Sprintf("%032b", uint(offspring)))
-			pop.Solutions[i].Fitness = Evaluate(4, pop.Solutions[i].Bits)
-		}
+		sliceToPopulation(offspringData, pop)
 
 		generationsPassed++
 

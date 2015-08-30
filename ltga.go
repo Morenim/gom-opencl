@@ -16,7 +16,7 @@ type Solution struct {
 }
 
 func (s Solution) String() string {
-	return fmt.Sprintf("%v %v\n", s.Fitness, s.Bits)
+	return fmt.Sprintf("%v %v\n", s.Bits, s.Fitness)
 }
 
 // Population is a collection of solutions.

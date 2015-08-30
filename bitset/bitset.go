@@ -3,8 +3,8 @@
 package bitset
 
 import (
+	"bytes"
 	"fmt"
-	"strconv"
 )
 
 const pow uint = 6
@@ -63,8 +63,17 @@ func (bs *bitSet) Has(pos int) bool {
 }
 
 func (bs *bitSet) String() string {
-	i := "%0" + strconv.Itoa(bs.len) + "b"
-	return fmt.Sprintf(i, bs.array[0])
+	var buffer bytes.Buffer
+	skipFirst := 0
+	if bs.len%64 != 0 {
+		format := fmt.Sprintf("%c0%db", '%', uint((bs.len)+1)%64-1)
+		buffer.WriteString(fmt.Sprintf(format, bs.array[len(bs.array)-1]))
+		skipFirst = 1
+	}
+	for i := len(bs.array) - 1 - skipFirst; i >= 0; i-- {
+		buffer.WriteString(fmt.Sprintf("%064b", bs.array[i]))
+	}
+	return buffer.String()
 }
 
 // New returns an interface to the dense bit-string implementation.
@@ -84,4 +93,15 @@ func FromString(s string) (BitSet, error) {
 		}
 	}
 	return b, nil
+}
+
+func FromUInt32s(ints []uint32, length int) (BitSet, error) {
+	r := make([]uint64, 1+((length-1)>>6))
+	for i, _ := range r {
+		r[i] = uint64(ints[i<<1])
+		if i<<1+1 < len(ints) {
+			r[i] += (uint64(ints[i<<1+1]) << 32)
+		}
+	}
+	return &bitSet{length, r}, nil
 }
