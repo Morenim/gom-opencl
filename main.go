@@ -8,20 +8,66 @@ import (
 	"io/ioutil"
 	"log"
 	"math/rand"
+	"os"
 	"time"
 	"unsafe"
 )
 
 var (
 	useCPU         bool
+	printProblems  bool
 	verbosity      int
 	randomSeed     int
 	populationSize int
 	numGenerations int
 	problemLength  int
+	problemIndex   int
 )
 
-func Evaluate(k int, bits bitset.BitSet) (fitness float64) {
+var problems = []struct {
+	name      string
+	evaluator Problem
+	clSource  string
+}{
+	{"Deceptive Trap", DeceptiveTrap(4), "deceptive_trap.cl"},
+	{"HIFF", HIFF(0), "hiff.cl"},
+}
+
+type Problem interface {
+	Evaluate(bits bitset.BitSet) float64
+}
+
+type DeceptiveTrap int
+
+type HIFF int
+
+func (_ HIFF) Evaluate(bits bitset.BitSet) float64 {
+
+	blockSize := 1
+	fitness := 0
+
+	for blockSize <= bits.Len() {
+		for i := 0; i < bits.Len(); i += blockSize {
+			first := bits.Has(i)
+			same := true
+			for j := i + 1; j < i+blockSize; j++ {
+				if bits.Has(j) != first {
+					same = false
+					break
+				}
+			}
+			if same {
+				fitness += blockSize
+			}
+		}
+		blockSize *= 2
+	}
+
+	return float64(fitness)
+}
+
+func (dt DeceptiveTrap) Evaluate(bits bitset.BitSet) (fitness float64) {
+	k := int(dt)
 	for i := 0; i < bits.Len()/k; i++ {
 		t := 0 // number of bits set to 1
 		for j := 0; j < k; j++ {
@@ -200,7 +246,7 @@ func printGeneration(numGenerations int, pop *Population) {
 	fmt.Printf("Generation %d\n", numGenerations)
 	fmt.Println("===============")
 	for i, solution := range pop.Solutions {
-		solution.Fitness = Evaluate(4, solution.Bits)
+		solution.Fitness = problems[problemIndex].evaluator.Evaluate(solution.Bits)
 		fmt.Printf("x_%-2d: %v", i, solution)
 	}
 	fmt.Println("===============")
@@ -282,7 +328,7 @@ func sliceToPopulation(src []cl.CL_uint, pop *Population) {
 			buffer[j] = uint32(src[i*numBlocks+j])
 		}
 		pop.Solutions[i].Bits, _ = bitset.FromUInt32s(buffer, pop.Length())
-		pop.Solutions[i].Fitness = Evaluate(4, pop.Solutions[i].Bits)
+		pop.Solutions[i].Fitness = problems[problemIndex].evaluator.Evaluate(pop.Solutions[i].Bits)
 	}
 }
 
@@ -300,6 +346,7 @@ func setKernelArg(kernel cl.CL_kernel, pos int, data interface{}) {
 		status = cl.CLSetKernelArg(
 			kernel, cl.CL_uint(pos), cl.CL_size_t(unsafe.Sizeof(*data)),
 			unsafe.Pointer(data))
+
 	default:
 		log.Fatalf("Fatal error: setting kernel arg for unknown type %t.", data)
 	}
@@ -308,6 +355,12 @@ func setKernelArg(kernel cl.CL_kernel, pos int, data interface{}) {
 		log.Printf("%v", cl.ERROR_CODES_STRINGS[-status])
 		log.Fatalf("Fatal error: could not set arg %d for OpenCL kernel.", pos)
 	}
+}
+
+func printProblemList() {
+	fmt.Println("Index 0: Deceptive Trap Function (k = 4)")
+	fmt.Println("Index 1: HIFF")
+	os.Exit(0)
 }
 
 func printProgramInfo(program cl.CL_program, name cl.CL_program_info) string {
@@ -342,6 +395,8 @@ func printProgramBuildInfo(program cl.CL_program, device cl.CL_device_id) {
 		program, device, cl.CL_PROGRAM_BUILD_LOG,
 		numChars, &info, nil), err)
 
+	// printProgramInfo(program, cl.CL_PROGRAM_SOURCE)
+
 	log.Print("Fatal error: could not build OpenCL program.")
 	log.Fatalf("%s", info.(string))
 }
@@ -359,6 +414,10 @@ func parseCommandLine() {
 	flag.IntVar(&numGenerations, "generations", 10, "Maximum number of generations to perform for GOMEA.")
 
 	flag.IntVar(&problemLength, "length", 32, "Length of the optimization problem.")
+
+	flag.IntVar(&problemIndex, "index", 0, "Index of the optimization problem to solve.")
+
+	flag.BoolVar(&printProblems, "problem-list", false, "Print a list of the available optimization problems and terminate.")
 
 	flag.Parse()
 }
@@ -440,7 +499,7 @@ func runOpenCL() {
 	var err error
 
 	clSourceFiles := []string{
-		"kernels/deceptive_trap.cl",
+		"kernels/" + problems[problemIndex].clSource,
 		"kernels/rng.cl",
 		"kernels/gom.cl",
 	}
@@ -535,6 +594,19 @@ func runOpenCL() {
 		freqs := Frequencies(pop)
 		lt := LinkageTree(pop, freqs)
 		flattenIntoSlice(lt, ltData)
+
+		/*fosSize := int(ltData[0])
+		offset := 1
+		for i := 1; i < fosSize; i++ {
+			numMasks := int(ltData[offset])
+			offset++
+
+			for j := 0; j < numMasks; j++ {
+				fmt.Printf("%d %032b\n", ltData[offset+2*j], ltData[offset+2*j+1])
+			}
+			offset += numMasks * 2
+		}*/
+
 		requireSuccess(cl.CLEnqueueWriteBuffer(
 			commandQueue, ltBuffer, cl.CL_TRUE, 0,
 			ltSize, unsafe.Pointer(&ltData[0]), 0, nil, nil),
@@ -588,6 +660,10 @@ func runOpenCL() {
 func main() {
 
 	parseCommandLine()
+
+	if printProblems {
+		printProblemList()
+	}
 
 	runOpenCL()
 }

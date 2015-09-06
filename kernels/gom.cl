@@ -3,6 +3,11 @@ int ints_per_solution(int solution_length)
   return 1 + ((solution_length - 1) >> 5);
 }
 
+void copyMasks(uint num_masks, global uint *fos, global uint *src, global uint* dest) 
+{
+
+}
+
 // Implements the core functionality of the GOMEA algorithm.
 kernel void gom(global uint *population, const uint population_size, const uint solution_length, global uint *clones, global uint *fos, global write_only uint *offspring)
 {
@@ -36,16 +41,23 @@ kernel void gom(global uint *population, const uint population_size, const uint 
       clones[intdex + mask_index] = (offspring[intdex + mask_index] & ~mask) | changes;
     }
 
-    uint newFitness = evaluate(&clones[intdex], solution_length);
+    uint newFitness = evaluate(clones + intdex, solution_length);
 
     if (newFitness >= fitness)
     {
-      fitness = newFitness;
-
       for (uint j = 0; j < num_masks; j++)
       {
         uint mask_index = intdex + fos[fos_ptr + 2 * j + 1];
         offspring[mask_index] = clones[mask_index];
+      }
+      fitness = newFitness;
+    }
+    else
+    {
+      for (uint j = 0; j < num_masks; j++)
+      {
+        uint mask_index = intdex + fos[fos_ptr + 2 * j + 1];
+        clones[mask_index] = offspring[mask_index];
       }
     }
 
