@@ -35,6 +35,7 @@ var problems = []struct {
 
 type Problem interface {
 	Evaluate(bits bitset.BitSet) float64
+	IsOptimal(solution Solution) bool
 }
 
 type DeceptiveTrap int
@@ -66,6 +67,20 @@ func (_ HIFF) Evaluate(bits bitset.BitSet) float64 {
 	return float64(fitness)
 }
 
+func (_ HIFF) IsOptimal(solution Solution) bool {
+	t := solution.Bits.Has(0)
+	same := true
+
+	for i := 1; i < solution.Bits.Len(); i++ {
+		if solution.Bits.Has(i) != t {
+			same = false
+			break
+		}
+	}
+
+	return same
+}
+
 func (dt DeceptiveTrap) Evaluate(bits bitset.BitSet) (fitness float64) {
 	k := int(dt)
 	for i := 0; i < bits.Len()/k; i++ {
@@ -82,6 +97,19 @@ func (dt DeceptiveTrap) Evaluate(bits bitset.BitSet) (fitness float64) {
 		}
 	}
 	return
+}
+
+func (dt DeceptiveTrap) IsOptimal(solution Solution) bool {
+	allOnes := true
+
+	for i := 0; i < solution.Bits.Len(); i++ {
+		if !solution.Bits.Has(i) {
+			allOnes = false
+			break
+		}
+	}
+
+	return allOnes
 }
 
 type byLength [][]int
@@ -411,7 +439,7 @@ func parseCommandLine() {
 
 	flag.IntVar(&populationSize, "size", 64, "Number of solutions in the fixed-size population.")
 
-	flag.IntVar(&numGenerations, "generations", 10, "Maximum number of generations to perform for GOMEA.")
+	flag.IntVar(&numGenerations, "generations", -1, "Maximum number of generations to perform for GOMEA.")
 
 	flag.IntVar(&problemLength, "length", 32, "Length of the optimization problem.")
 
@@ -566,6 +594,12 @@ func runOpenCL() {
 	ltBuffer := cl.CLCreateBuffer(context, cl.CL_MEM_READ_ONLY, ltSize, nil, &status)
 	requireSuccess(status, "could not allocate an OpenCL memory buffer.")
 
+	var dummyCLBool cl.CL_char
+	improvsSize := cl.CL_size_t(unsafe.Sizeof(dummyCLBool)) * cl.CL_size_t(pop.Size())
+	improvsData := make([]cl.CL_char, pop.Size())
+	improvsBuffer := cl.CLCreateBuffer(context, cl.CL_MEM_WRITE_ONLY, improvsSize, nil, &status)
+	requireSuccess(status, "could not allocate an OpenCL memory buffer.")
+
 	offspringBuffer := cl.CLCreateBuffer(
 		context, cl.CL_MEM_WRITE_ONLY, dataSize, nil, &status)
 	requireSuccess(status, "could not allocate an OpenCL memory buffer.")
@@ -584,28 +618,16 @@ func runOpenCL() {
 
 	generationsPassed := 0
 
-	for !done {
+	if verbosity >= 3 {
+		printGeneration(0, pop)
+	}
 
-		if (verbosity == 2 && generationsPassed == numGenerations-1) || (verbosity == 3) {
-			printGeneration(generationsPassed, pop)
-		}
+	for !done {
 
 		// Build the linkage tree and upload a flattened version to the compute device.
 		freqs := Frequencies(pop)
 		lt := LinkageTree(pop, freqs)
 		flattenIntoSlice(lt, ltData)
-
-		/*fosSize := int(ltData[0])
-		offset := 1
-		for i := 1; i < fosSize; i++ {
-			numMasks := int(ltData[offset])
-			offset++
-
-			for j := 0; j < numMasks; j++ {
-				fmt.Printf("%d %032b\n", ltData[offset+2*j], ltData[offset+2*j+1])
-			}
-			offset += numMasks * 2
-		}*/
 
 		requireSuccess(cl.CLEnqueueWriteBuffer(
 			commandQueue, ltBuffer, cl.CL_TRUE, 0,
@@ -627,7 +649,8 @@ func runOpenCL() {
 		setKernelArg(kernel, 2, &solLength)
 		setKernelArg(kernel, 3, &cloneBuffer)
 		setKernelArg(kernel, 4, &ltBuffer)
-		setKernelArg(kernel, 5, &offspringBuffer)
+		setKernelArg(kernel, 5, &improvsBuffer)
+		setKernelArg(kernel, 6, &offspringBuffer)
 
 		var globalWorkSize [1]cl.CL_size_t
 		globalWorkSize[0] = cl.CL_size_t(pop.Size())
@@ -646,6 +669,11 @@ func runOpenCL() {
 			dataSize, unsafe.Pointer(&offspringData[0]), 0, nil, nil),
 			"reading a buffer failed.")
 
+		requireSuccess(cl.CLEnqueueReadBuffer(
+			commandQueue, improvsBuffer, cl.CL_TRUE, 0,
+			improvsSize, unsafe.Pointer(&improvsData[0]), 0, nil, nil),
+			"reading improvs buffer failed.")
+
 		sliceToPopulation(offspringData, pop)
 
 		generationsPassed++
@@ -653,6 +681,33 @@ func runOpenCL() {
 		// TODO: Termination Criterion
 		if generationsPassed == numGenerations {
 			done = true
+		}
+
+		improved := false
+
+		for _, b := range improvsData {
+			if b > 0 {
+				improved = true
+				break
+			}
+		}
+
+		if !improved {
+			done = true
+		}
+
+		for _, s := range pop.Solutions {
+			if problems[problemIndex].evaluator.IsOptimal(s) {
+				if verbosity >= 2 {
+					log.Printf("Optimal solution found after %d generations.\n", generationsPassed)
+				}
+				done = true
+				break
+			}
+		}
+
+		if (verbosity == 2 && done) || (verbosity == 3) {
+			printGeneration(generationsPassed, pop)
 		}
 	}
 }
