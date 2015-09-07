@@ -4,6 +4,8 @@ import (
 	"flag"
 	"fmt"
 	"github.com/Morenim/gom-opencl/bitset"
+	"github.com/Morenim/gom-opencl/ga"
+	"github.com/Morenim/gom-opencl/problem"
 	"github.com/rainliu/gocl/cl"
 	"io/ioutil"
 	"log"
@@ -26,90 +28,11 @@ var (
 
 var problems = []struct {
 	name      string
-	evaluator Problem
+	evaluator problem.Problem
 	clSource  string
 }{
-	{"Deceptive Trap", DeceptiveTrap(4), "deceptive_trap.cl"},
-	{"HIFF", HIFF(0), "hiff.cl"},
-}
-
-type Problem interface {
-	Evaluate(bits bitset.BitSet) float64
-	IsOptimal(solution Solution) bool
-}
-
-type DeceptiveTrap int
-
-type HIFF int
-
-func (_ HIFF) Evaluate(bits bitset.BitSet) float64 {
-
-	blockSize := 1
-	fitness := 0
-
-	for blockSize <= bits.Len() {
-		for i := 0; i < bits.Len(); i += blockSize {
-			first := bits.Has(i)
-			same := true
-			for j := i + 1; j < i+blockSize; j++ {
-				if bits.Has(j) != first {
-					same = false
-					break
-				}
-			}
-			if same {
-				fitness += blockSize
-			}
-		}
-		blockSize *= 2
-	}
-
-	return float64(fitness)
-}
-
-func (_ HIFF) IsOptimal(solution Solution) bool {
-	t := solution.Bits.Has(0)
-	same := true
-
-	for i := 1; i < solution.Bits.Len(); i++ {
-		if solution.Bits.Has(i) != t {
-			same = false
-			break
-		}
-	}
-
-	return same
-}
-
-func (dt DeceptiveTrap) Evaluate(bits bitset.BitSet) (fitness float64) {
-	k := int(dt)
-	for i := 0; i < bits.Len()/k; i++ {
-		t := 0 // number of bits set to 1
-		for j := 0; j < k; j++ {
-			if bits.Has(i*k + j) {
-				t++
-			}
-		}
-		if t == k {
-			fitness += float64(t)
-		} else {
-			fitness += float64(k - t - 1)
-		}
-	}
-	return
-}
-
-func (dt DeceptiveTrap) IsOptimal(solution Solution) bool {
-	allOnes := true
-
-	for i := 0; i < solution.Bits.Len(); i++ {
-		if !solution.Bits.Has(i) {
-			allOnes = false
-			break
-		}
-	}
-
-	return allOnes
+	{"Deceptive Trap", problem.DeceptiveTrap(4), "deceptive_trap.cl"},
+	{"HIFF", problem.HIFF(0), "hiff.cl"},
 }
 
 type byLength [][]int
@@ -132,16 +55,6 @@ func (bl byLength) Less(i, j int) bool {
 	return false
 }
 
-var deviceErrorMap = map[cl.CL_int]string{
-	cl.CL_SUCCESS:             "cl: Success",
-	cl.CL_DEVICE_NOT_FOUND:    "cl: Device Not Found",
-	cl.CL_OUT_OF_HOST_MEMORY:  "cl: Out of Host Memory",
-	cl.CL_OUT_OF_RESOURCES:    "cl: Out of Resources",
-	cl.CL_INVALID_VALUE:       "cl: Invalid Value",
-	cl.CL_INVALID_PLATFORM:    "cl: Invalid Platform",
-	cl.CL_INVALID_DEVICE_TYPE: "cl: Invalid Device Type",
-}
-
 // Find the first device matching the device type from the list of platforms.
 func findDevice(platforms []cl.CL_platform_id, deviceType cl.CL_device_type) (platformID cl.CL_platform_id, deviceID cl.CL_device_id) {
 
@@ -162,7 +75,7 @@ func findDevice(platforms []cl.CL_platform_id, deviceType cl.CL_device_type) (pl
 				continue
 			}
 		default:
-			log.Printf("%s", deviceErrorMap[status])
+			log.Printf("OpenCL failed with status code: %s", cl.ERROR_CODES_STRINGS[-status])
 			log.Fatalf("Fatal error: could not retrieve devices for platform %d", platform)
 		}
 
@@ -220,13 +133,8 @@ func printDeviceInfo(device cl.CL_device_id) {
 	var buffer interface{}
 
 	getParam := func(name cl.CL_device_info) interface{} {
-		status := cl.CLGetDeviceInfo(device, name, 128, &buffer, nil)
-
-		if status != cl.CL_SUCCESS {
-			log.Printf("%s", deviceErrorMap[status])
-			log.Fatalf("Fatal error: could not retrieve work group information for kernel.")
-		}
-
+		requireSuccess(cl.CLGetDeviceInfo(device, name, 128, &buffer, nil),
+			"could not retrieve work group information for kernel.")
 		return buffer
 	}
 
@@ -253,13 +161,8 @@ func printKernelWorkGroup(kernel cl.CL_kernel, device cl.CL_device_id) {
 	var buffer interface{}
 
 	getParam := func(name cl.CL_kernel_work_group_info) interface{} {
-		status := cl.CLGetKernelWorkGroupInfo(kernel, device, name, 12, &buffer, nil)
-
-		if status != cl.CL_SUCCESS {
-			log.Printf("%s", deviceErrorMap[status])
-			log.Fatalf("Fatal error: could not retrieve work group information for kernel.")
-		}
-
+		requireSuccess(cl.CLGetKernelWorkGroupInfo(kernel, device, name, 12, &buffer, nil),
+			"could not retrieve work group information for kernel.")
 		return buffer
 	}
 
@@ -270,12 +173,13 @@ func printKernelWorkGroup(kernel cl.CL_kernel, device cl.CL_device_id) {
 	log.Printf("\t%-11s: %v", "Preferred Work Group Size Multiple", getParam(cl.CL_KERNEL_PREFERRED_WORK_GROUP_SIZE_MULTIPLE))
 }
 
-func printGeneration(numGenerations int, pop *Population) {
+func printGeneration(numGenerations int, pop *ga.Population) {
 	fmt.Printf("Generation %d\n", numGenerations)
 	fmt.Println("===============")
 	for i, solution := range pop.Solutions {
-		solution.Fitness = problems[problemIndex].evaluator.Evaluate(solution.Bits)
-		fmt.Printf("x_%-2d: %v", i, solution)
+		fitness, optimal := problems[problemIndex].evaluator.Evaluate(solution.Bits)
+		solution.Fitness = fitness
+		fmt.Printf("x_%-2d: %v %t\n", i, solution, optimal)
 	}
 	fmt.Println("===============")
 	fmt.Println()
@@ -312,7 +216,7 @@ func flattenIntoSlice(src [][]int, dest []cl.CL_uint) {
 	}
 }
 
-func populationToSlice(pop *Population, dest []cl.CL_uint) {
+func populationToSlice(pop *ga.Population, dest []cl.CL_uint) {
 
 	destPtr := 0
 	length := pop.Length()
@@ -346,18 +250,25 @@ func populationToSlice(pop *Population, dest []cl.CL_uint) {
 	}
 }
 
-func sliceToPopulation(src []cl.CL_uint, pop *Population) {
+func sliceToPopulation(src []cl.CL_uint, pop *ga.Population) bool {
 
 	numBlocks := blocksPerSolution(pop)
 	buffer := make([]uint32, numBlocks)
+	foundOptimal := false
 
 	for i, _ := range pop.Solutions {
 		for j := 0; j < numBlocks; j++ {
 			buffer[j] = uint32(src[i*numBlocks+j])
 		}
 		pop.Solutions[i].Bits, _ = bitset.FromUInt32s(buffer, pop.Length())
-		pop.Solutions[i].Fitness = problems[problemIndex].evaluator.Evaluate(pop.Solutions[i].Bits)
+		fitness, optimal := problems[problemIndex].evaluator.Evaluate(pop.Solutions[i].Bits)
+		pop.Solutions[i].Fitness = fitness
+		if optimal {
+			foundOptimal = true
+		}
 	}
+
+	return foundOptimal
 }
 
 func setKernelArg(kernel cl.CL_kernel, pos int, data interface{}) {
@@ -450,7 +361,7 @@ func parseCommandLine() {
 	flag.Parse()
 }
 
-func blocksPerSolution(pop *Population) int {
+func blocksPerSolution(pop *ga.Population) int {
 	return ((pop.Length() - 1) >> 5) + 1
 }
 
@@ -569,7 +480,7 @@ func runOpenCL() {
 	var size cl.CL_uint
 	length := cl.CL_size_t(problemLength)
 
-	pop := NewPopulation(populationSize, problemLength)
+	pop := ga.NewPopulation(populationSize, problemLength)
 
 	numBlocks := blocksPerSolution(pop) * pop.Size()
 	dataSize := cl.CL_size_t(unsafe.Sizeof(size)) * cl.CL_size_t(numBlocks)
@@ -674,9 +585,13 @@ func runOpenCL() {
 			improvsSize, unsafe.Pointer(&improvsData[0]), 0, nil, nil),
 			"reading improvs buffer failed.")
 
-		sliceToPopulation(offspringData, pop)
+		foundOptimal := sliceToPopulation(offspringData, pop)
 
 		generationsPassed++
+
+		if (verbosity == 2 && done) || (verbosity == 3) {
+			printGeneration(generationsPassed, pop)
+		}
 
 		// TODO: Termination Criterion
 		if generationsPassed == numGenerations {
@@ -693,21 +608,17 @@ func runOpenCL() {
 		}
 
 		if !improved {
+			if verbosity >= 2 {
+				log.Println("Terminated after the population did not improve for one generation.")
+			}
 			done = true
 		}
 
-		for _, s := range pop.Solutions {
-			if problems[problemIndex].evaluator.IsOptimal(s) {
-				if verbosity >= 2 {
-					log.Printf("Optimal solution found after %d generations.\n", generationsPassed)
-				}
-				done = true
-				break
+		if foundOptimal {
+			if verbosity >= 2 {
+				log.Printf("Optimal solution found after %d generations.\n", generationsPassed)
 			}
-		}
-
-		if (verbosity == 2 && done) || (verbosity == 3) {
-			printGeneration(generationsPassed, pop)
+			done = true
 		}
 	}
 }

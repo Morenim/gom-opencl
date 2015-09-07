@@ -6,46 +6,8 @@ import (
 	"math"
 	"math/rand"
 
-	"github.com/Morenim/gom-opencl/bitset"
+	"github.com/Morenim/gom-opencl/ga"
 )
-
-// Solution is a bitstring solution to a maximization optimization problem.
-type Solution struct {
-	Fitness float64
-	Bits    bitset.BitSet
-}
-
-func (s Solution) String() string {
-	return fmt.Sprintf("%v %v\n", s.Bits, s.Fitness)
-}
-
-// Population is a collection of solutions.
-type Population struct {
-	Solutions []Solution
-}
-
-func (pop *Population) Size() int {
-	return len(pop.Solutions)
-}
-
-func (pop *Population) Length() int {
-	return pop.Solutions[0].Bits.Len()
-}
-
-// NewPopulation returns an unevaluated population.
-func NewPopulation(size, length int) *Population {
-	pop := new(Population)
-	pop.Solutions = make([]Solution, size)
-	for i := 0; i < size; i++ {
-		pop.Solutions[i] = randomSolution(length)
-		pop.Solutions[i].Fitness = 0.0
-	}
-	return pop
-}
-
-func (pop *Population) String() string {
-	return fmt.Sprintf("%v", pop.Solutions)
-}
 
 var (
 	logLookup float64
@@ -89,21 +51,9 @@ func (m *matrix) String() string {
 	return buffer.String()
 }
 
-func randomSolution(length int) Solution {
-	var s Solution
-	s.Bits = bitset.New(length)
-	for i := 0; i < length; i++ {
-		if rand.Float32() > 0.5 {
-			s.Bits.Set(i)
-		}
-	}
-	//s.Objective, s.Constraint = evaluate(s.Bits)
-	return s
-}
-
 // Count the frequencies of bits for every permutation of the problem
 // variables indicated by indices. Used to comptue the distance matrix.
-func frequency(pop *Population, indices []int) []int {
+func frequency(pop *ga.Population, indices []int) []int {
 	numPerms := 1 << uint(len(indices))
 	perms := make([]int, numPerms)
 
@@ -133,7 +83,7 @@ func entropy(freqs []int, size int) float64 {
 	return p
 }
 
-func Frequencies(pop *Population) [][][]int {
+func Frequencies(pop *ga.Population) [][][]int {
 	freqs := make([][][]int, pop.Length())
 
 	indices1 := make([]int, 1)
@@ -155,7 +105,7 @@ func Frequencies(pop *Population) [][][]int {
 // Function distanceMatrix computes the mutual information between every
 // pair of problem variables. The frequencies of bits in the population
 // are used for the probabilites.
-func distanceMatrix(pop *Population, frequencies [][][]int) *matrix {
+func distanceMatrix(pop *ga.Population, frequencies [][][]int) *matrix {
 	distances := newMatrix(pop.Length())
 
 	for i := 0; i < pop.Length(); i++ {
@@ -209,7 +159,7 @@ func mergeClusters(left, right []int) []int {
 	return dest
 }
 
-func LinkageTree(pop *Population, frequencies [][][]int) [][]int {
+func LinkageTree(pop *ga.Population, frequencies [][][]int) [][]int {
 
 	// Validate Input
 
